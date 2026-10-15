@@ -1020,7 +1020,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-
 <script>
 /* ICONS */
 const ICONS = {
@@ -1045,159 +1044,12 @@ const SHAPES = {
   star:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="0.9" stroke-linejoin="round"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>`
 };
 
-/* ============================================================
-   INDEXEDDB — хранилище для больших файлов (модели, фото)
-============================================================ */
-const IDB_NAME = "nova_assets_v2";
-const IDB_VERSION = 1;
-const IDB_STORE = "assets";
-let idbInstance = null;
-const assetCache = {};
-
-function openIDB(){
-  if(idbInstance) return Promise.resolve(idbInstance);
-  return new Promise((res, rej) => {
-    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if(!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
-    };
-    req.onsuccess = () => { idbInstance = req.result; res(idbInstance); };
-    req.onerror = () => rej(req.error);
-  });
-}
-async function idbSet(key, value){
-  const db = await openIDB();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).put(value, key);
-    tx.oncomplete = () => { assetCache[key] = value; res(); };
-    tx.onerror = () => rej(tx.error);
-  });
-}
-async function idbGet(key){
-  if(assetCache[key] !== undefined) return assetCache[key];
-  const db = await openIDB();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(IDB_STORE, "readonly");
-    const r = tx.objectStore(IDB_STORE).get(key);
-    r.onsuccess = () => { assetCache[key] = r.result; res(r.result); };
-    r.onerror = () => rej(r.error);
-  });
-}
-async function idbDel(key){
-  delete assetCache[key];
-  const db = await openIDB();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).delete(key);
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-}
-async function idbKeys(){
-  const db = await openIDB();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(IDB_STORE, "readonly");
-    const r = tx.objectStore(IDB_STORE).getAllKeys();
-    r.onsuccess = () => res(r.result);
-    r.onerror = () => rej(r.error);
-  });
-}
-async function idbClear(){
-  Object.keys(assetCache).forEach(k => delete assetCache[k]);
-  const db = await openIDB();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).clear();
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-}
-async function preloadAssets(){
-  try{
-    const keys = await idbKeys();
-    for(const k of keys){
-      if(assetCache[k] === undefined) assetCache[k] = await idbGet(k);
-    }
-    console.log("[NOVA] Ассетов загружено:", keys.length);
-  }catch(e){ console.warn("IDB preload failed", e); }
-}
-
-/* Сжатие фото */
-function compressImage(file, maxSize = 900, quality = 0.78){
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const img = new Image();
-      img.onload = () => {
-        let { width, height } = img;
-        if(width > maxSize || height > maxSize){
-          if(width > height){ height = Math.round(height * maxSize / width); width = maxSize; }
-          else { width = Math.round(width * maxSize / height); height = maxSize; }
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width; canvas.height = height;
-        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.onerror = reject;
-      img.src = e.target.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-/* Миграция старых данных из localStorage в IDB */
-async function migrateToIDB(){
-  let migrated = 0;
-  if(Array.isArray(content.models3d)){
-    for(const m of content.models3d){
-      if(m.data && !m.assetKey){
-        const key = "model3d_" + m.id;
-        try{
-          await idbSet(key, m.data);
-          m.assetKey = key;
-          delete m.data;
-          migrated++;
-        }catch(e){ console.warn("migration model fail", e); }
-      }
-    }
-  }
-  for(const p of products){
-    if(p.model3d && !p.model3dKey){
-      const key = "pmodel_" + p.id;
-      try{
-        await idbSet(key, p.model3d);
-        p.model3dKey = key;
-        delete p.model3d;
-        migrated++;
-      }catch(e){}
-    }
-    if(p.image && !p.imageKey && p.image.length > 30000){
-      const key = "pimage_" + p.id;
-      try{
-        await idbSet(key, p.image);
-        p.imageKey = key;
-        delete p.image;
-        migrated++;
-      }catch(e){}
-    }
-  }
-  if(migrated > 0){
-    saveContent(); saveProducts();
-    showToast(`Перенесено в IndexedDB: ${migrated} файлов`);
-  }
-  return migrated;
-}
-
-/* CONFIG */
 const ADMIN_PASSWORD = "nova2025";
-const LS_CONTENT = "nova_content_v6";
-const LS_PRODUCTS = "nova_products_v6";
-const LS_CART = "nova_cart_v6";
+const LS_CONTENT = "nova_content_v7";
+const LS_PRODUCTS = "nova_products_v7";
+const LS_CART = "nova_cart_v7";
 const LS_THEME = "nova_theme";
+const LS_GH = "nova_gh_config";
 const SS_ADMIN = "nova_admin";
 
 const DEFAULT_CONTENT = {
@@ -1222,12 +1074,12 @@ const DEFAULT_CONTENT = {
   models3d:[]
 };
 const DEFAULT_PRODUCTS = [
-  {id:1,title:"Дракон Драконьего Пика",desc:"Высота 24 см · смола высокого разрешения",price:4990,shape:"helix",badge:"hit",imageKey:null,model3dKey:null},
-  {id:2,title:"Бюст Самурая",desc:"Детализация 0.03 мм · ручная покраска",price:7490,shape:"pyramid",badge:"new",imageKey:null,model3dKey:null},
-  {id:3,title:"Корабль XR-9",desc:"Сборная модель · 42 детали",price:5290,shape:"cube",badge:"",imageKey:null,model3dKey:null},
-  {id:4,title:"Череп Механика",desc:"Подвижные элементы · светящаяся смола",price:6990,shape:"sphere",badge:"limited",imageKey:null,model3dKey:null},
-  {id:5,title:"Волк-страж",desc:"Гарнитурная смола · высота 18 см",price:5490,shape:"torus",badge:"",imageKey:null,model3dKey:null},
-  {id:6,title:"Ворота Тории",desc:"Миниатюра для интерьера · подсветка",price:3890,shape:"star",badge:"new",imageKey:null,model3dKey:null}
+  {id:1,title:"Дракон Драконьего Пика",desc:"Высота 24 см · смола высокого разрешения",price:4990,shape:"helix",badge:"hit",image:null,model3d:null},
+  {id:2,title:"Бюст Самурая",desc:"Детализация 0.03 мм · ручная покраска",price:7490,shape:"pyramid",badge:"new",image:null,model3d:null},
+  {id:3,title:"Корабль XR-9",desc:"Сборная модель · 42 детали",price:5290,shape:"cube",badge:"",image:null,model3d:null},
+  {id:4,title:"Череп Механика",desc:"Подвижные элементы · светящаяся смола",price:6990,shape:"sphere",badge:"limited",image:null,model3d:null},
+  {id:5,title:"Волк-страж",desc:"Гарнитурная смола · высота 18 см",price:5490,shape:"torus",badge:"",image:null,model3d:null},
+  {id:6,title:"Ворота Тории",desc:"Миниатюра для интерьера · подсветка",price:3890,shape:"star",badge:"new",image:null,model3d:null}
 ];
 const DEFAULT_FEATURES = [
   {icon:"bolt",title:"Быстрая печать",text:"Готовим заказ за 24–72 часа и отправляем курьером или в постамат."},
@@ -1248,76 +1100,167 @@ let pendingPhoto = null;
 let pendingModel3d = null;
 let pendingPhotoRemoved = false;
 let pendingModelRemoved = false;
+let isDirty = false;
+let ghConfig = loadJSON(LS_GH, {owner:"",repo:"",branch:"main",token:""});
 
 if(!Array.isArray(content.models3d)) content.models3d = [];
+if(!content.features) content.features = features;
 
 function loadJSON(key, def){try{const r=localStorage.getItem(key);return r?JSON.parse(r):(Array.isArray(def)?def.slice():JSON.parse(JSON.stringify(def)))}catch(e){return Array.isArray(def)?def.slice():JSON.parse(JSON.stringify(def))}}
-function saveContent(){try{localStorage.setItem(LS_CONTENT,JSON.stringify(content));return true}catch(e){showToast("Тексты не сохранились");return false}}
-function saveProducts(){try{localStorage.setItem(LS_PRODUCTS,JSON.stringify(products));return true}catch(e){showToast("Товары не сохранились");return false}}
+function saveLocal(){try{localStorage.setItem(LS_CONTENT,JSON.stringify(content));localStorage.setItem(LS_PRODUCTS,JSON.stringify(products));localStorage.setItem(LS_CART,JSON.stringify(cart))}catch(e){}}
+function saveContent(){content.features = features;saveLocal()}
+function saveProducts(){saveLocal()}
 function saveCart(){try{localStorage.setItem(LS_CART,JSON.stringify(cart))}catch(e){}}
+function markDirty(){isDirty = true;updateStatus("dirty","Есть неопубликованные изменения")}
+function updateStatus(state, msg){
+  const dot = document.getElementById("statusDot"); const txt = document.getElementById("statusMsg");
+  if(!dot || !txt) return;
+  dot.className = "dot-ind" + (state === "dirty" ? " dirty" : state === "error" ? " error" : "");
+  txt.textContent = msg;
+}
 
-/* ============================================================
-   THREE.js viewer
-============================================================ */
+/* GITHUB API */
+const GH_API = "https://api.github.com";
+function ghReady(){ return ghConfig.owner && ghConfig.repo && ghConfig.token; }
+function ghHeaders(){
+  return {"Authorization":"Bearer "+ghConfig.token,"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28","Content-Type":"application/json"};
+}
+async function ghGet(path){
+  const url = `${GH_API}/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${path}?ref=${ghConfig.branch}&t=${Date.now()}`;
+  const r = await fetch(url, {headers: ghHeaders()});
+  if(r.status === 404) return null;
+  if(!r.ok) throw new Error(`GitHub GET ${path}: ${r.status}`);
+  const data = await r.json();
+  return {sha: data.sha, content: data.content, path: data.path};
+}
+async function ghPut(path, base64Content, message){
+  const existing = await ghGet(path);
+  const body = {message: message, content: base64Content, branch: ghConfig.branch};
+  if(existing && existing.sha) body.sha = existing.sha;
+  const url = `${GH_API}/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${path}`;
+  const r = await fetch(url, {method:"PUT", headers: ghHeaders(), body: JSON.stringify(body)});
+  if(!r.ok){ const err = await r.text(); throw new Error(`GitHub PUT ${path}: ${r.status} ${err}`); }
+  return await r.json();
+}
+function b64encode(str){return btoa(unescape(encodeURIComponent(str)))}
+function dataUrlToBase64(dataUrl){const i = dataUrl.indexOf(",");return i >= 0 ? dataUrl.slice(i+1) : dataUrl}
+function slugify(s){return (s||"file").toLowerCase().replace(/[^a-z0-9а-яё]+/gi,"-").replace(/^-+|-+$/g,"").slice(0,40) || "file"}
+
+async function loadFromGitHub(){
+  if(!ghReady()) return false;
+  try{
+    const c = await ghGet("data/content.json");
+    if(c){ try{ const raw = atob(c.content.replace(/\n/g,"")); const json = JSON.parse(decodeURIComponent(escape(raw))); content = {...DEFAULT_CONTENT, ...json}; features = content.features || features; }catch(e){ console.warn(e); } }
+    const p = await ghGet("data/products.json");
+    if(p){ try{ const raw = atob(p.content.replace(/\n/g,"")); const json = JSON.parse(decodeURIComponent(escape(raw))); if(Array.isArray(json)) products = json; }catch(e){ console.warn(e); } }
+    saveLocal(); updateStatus("ok", "Данные загружены с GitHub"); return true;
+  }catch(e){ console.warn("loadFromGitHub error", e); updateStatus("error", "Не удалось загрузить из GitHub"); return false; }
+}
+
+async function publishAll(){
+  if(!ghReady()){ showToast("Сначала настройте GitHub во вкладке GitHub"); return; }
+  const btn = document.getElementById("publishBtn");
+  btn.disabled = true;
+  const oldHtml = btn.innerHTML;
+  btn.innerHTML = "Публикую...";
+  updateStatus("dirty","Публикую изменения...");
+  let count = 0;
+  try{
+    const files = [];
+    const contentForRepo = JSON.parse(JSON.stringify(content));
+    contentForRepo.models3d = (contentForRepo.models3d || []).map(m => ({id:m.id,name:m.name,path:m.path||null,autorotate:m.autorotate||"yes",speed:m.speed||"1.5"}));
+    files.push({path:"data/content.json", b64: b64encode(JSON.stringify(contentForRepo,null,2))});
+    const productsForRepo = products.map(p => ({id:p.id,title:p.title,desc:p.desc,price:p.price,shape:p.shape,badge:p.badge,image:p.imagePath||null,model3d:p.model3dPath||null}));
+    files.push({path:"data/products.json", b64: b64encode(JSON.stringify(productsForRepo,null,2))});
+
+    for(const m of content.models3d){
+      if(m.data){
+        const fname = `models/${Date.now()}_${m.id}_${slugify(m.name)}.glb`;
+        files.push({path: fname, b64: dataUrlToBase64(m.data)});
+        m.path = fname; delete m.data;
+      }
+    }
+    contentForRepo.models3d = content.models3d.map(m => ({id:m.id,name:m.name,path:m.path||null,autorotate:m.autorotate||"yes",speed:m.speed||"1.5"}));
+    files[0].b64 = b64encode(JSON.stringify(contentForRepo,null,2));
+
+    for(const p of products){
+      if(p.model3d && !p.model3dPath){
+        const fname = `models/${Date.now()}_p${p.id}_${slugify(p.title)}.glb`;
+        files.push({path: fname, b64: dataUrlToBase64(p.model3d)});
+        p.model3dPath = fname; delete p.model3d;
+      }
+      if(p.image && !p.imagePath){
+        const fname = `images/${Date.now()}_p${p.id}_${slugify(p.title)}.jpg`;
+        files.push({path: fname, b64: dataUrlToBase64(p.image)});
+        p.imagePath = fname; delete p.image;
+      }
+    }
+    const productsForRepo2 = products.map(p => ({id:p.id,title:p.title,desc:p.desc,price:p.price,shape:p.shape,badge:p.badge,image:p.imagePath||null,model3d:p.model3dPath||null}));
+    files[1].b64 = b64encode(JSON.stringify(productsForRepo2,null,2));
+
+    const dt = new Date().toLocaleString("ru-RU");
+    for(const f of files){
+      updateStatus("dirty", `Загружаю ${f.path}...`);
+      await ghPut(f.path, f.b64, `Publish: ${f.path} — ${dt}`);
+      count++;
+    }
+    saveLocal();
+    isDirty = false;
+    updateStatus("ok", `Опубликовано ${count} файлов · GitHub Pages пересоберётся через 1-2 мин`);
+    showToast("Опубликовано! Через 1-2 минуты обновится");
+  }catch(e){
+    console.error(e); updateStatus("error", "Ошибка: " + e.message); showToast("Ошибка: " + e.message);
+  }finally{ btn.disabled = false; btn.innerHTML = oldHtml; }
+}
+
+/* THREE.js */
 const viewerRegistry = [];
-const MAX_CARD_VIEWERS = 6;
-
-function makeViewer(canvasEl, dataURL, opts = {}) {
-  const { controls = false, autorotate = true, speed = 1.5 } = opts;
+function makeViewer(canvasEl, source, opts = {}){
+  const {controls=false, autorotate=true, speed=1.5, baseUrl=""} = opts;
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
   camera.position.set(0, 0.6, 3);
-  const renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const renderer = new THREE.WebGLRenderer({canvas:canvasEl, antialias:true, alpha:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setClearColor(0x000000, 0);
-  if (THREE.sRGBEncoding) renderer.outputEncoding = THREE.sRGBEncoding;
+  if(THREE.sRGBEncoding) renderer.outputEncoding = THREE.sRGBEncoding;
   scene.add(new THREE.AmbientLight(0xffffff, 0.75));
-  const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(5, 5, 5); scene.add(key);
-  const fill = new THREE.DirectionalLight(0x88aaff, 0.5); fill.position.set(-5, -3, 2); scene.add(fill);
-  const rim = new THREE.DirectionalLight(0xff88cc, 0.3); rim.position.set(0, -5, -5); scene.add(rim);
-
+  const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(5,5,5); scene.add(key);
+  const fill = new THREE.DirectionalLight(0x88aaff, 0.5); fill.position.set(-5,-3,2); scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xff88cc, 0.3); rim.position.set(0,-5,-5); scene.add(rim);
   let orbit = null;
-  if (controls && THREE.OrbitControls) {
+  if(controls && THREE.OrbitControls){
     orbit = new THREE.OrbitControls(camera, canvasEl);
-    orbit.enableDamping = true;
-    orbit.dampingFactor = 0.06;
-    orbit.minDistance = 1;
-    orbit.maxDistance = 10;
-    orbit.enablePan = false;
-    orbit.autoRotate = autorotate;
-    orbit.autoRotateSpeed = speed;
+    orbit.enableDamping = true; orbit.dampingFactor = 0.06;
+    orbit.minDistance = 1; orbit.maxDistance = 10; orbit.enablePan = false;
+    orbit.autoRotate = autorotate; orbit.autoRotateSpeed = speed;
   }
-  let model = null;
-  let rafId = null;
-  let running = false;
-  function resize() {
+  let model = null, rafId = null, running = false;
+  function resize(){
     const r = canvasEl.parentElement.getBoundingClientRect();
-    const w = Math.max(1, r.width), h = Math.max(1, r.height);
-    renderer.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
+    const w = Math.max(1,r.width), h = Math.max(1,r.height);
+    renderer.setSize(w,h,false); camera.aspect = w/h; camera.updateProjectionMatrix();
   }
   resize();
-  const ro = new ResizeObserver(resize);
-  ro.observe(canvasEl.parentElement);
-  function loop() {
-    if (!running) return;
+  const ro = new ResizeObserver(resize); ro.observe(canvasEl.parentElement);
+  function loop(){
+    if(!running) return;
     rafId = requestAnimationFrame(loop);
-    if (orbit) orbit.update();
-    else if (model && autorotate) model.rotation.y += 0.005 * speed;
+    if(orbit) orbit.update();
+    else if(model && autorotate) model.rotation.y += 0.005 * speed;
     renderer.render(scene, camera);
   }
-  function start() { if (!running) { running = true; loop(); } }
-  function stop() { running = false; if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
-  function dispose() {
-    stop();
-    try { ro.disconnect(); } catch(e){}
-    if (orbit) try { orbit.dispose(); } catch(e){}
-    if (model) scene.remove(model);
-    try { renderer.dispose(); } catch(e){}
+  function start(){ if(!running){ running=true; loop(); } }
+  function stop(){ running=false; if(rafId){cancelAnimationFrame(rafId);rafId=null;} }
+  function dispose(){
+    stop(); try{ ro.disconnect(); }catch(e){}
+    if(orbit) try{ orbit.dispose(); }catch(e){}
+    if(model) scene.remove(model);
+    try{ renderer.dispose(); }catch(e){}
   }
   const loader = new THREE.GLTFLoader();
-  loader.load(dataURL, (gltf) => {
+  const url = source.startsWith("data:") || source.startsWith("http") ? source : (baseUrl + source);
+  loader.load(url, (gltf)=>{
     const m = gltf.scene;
     const box = new THREE.Box3().setFromObject(m);
     const size = box.getSize(new THREE.Vector3());
@@ -1326,118 +1269,86 @@ function makeViewer(canvasEl, dataURL, opts = {}) {
     const scale = 2 / maxDim;
     m.scale.setScalar(scale);
     m.position.sub(center.multiplyScalar(scale));
-    m.traverse(o => { if (o.isMesh && o.material) o.material.side = THREE.DoubleSide; });
-    scene.add(m);
-    model = m;
-    start();
-  }, undefined, (err) => console.warn("GLTF load error", err));
-  const viewer = { start, stop, dispose, resize };
+    m.traverse(o => { if(o.isMesh && o.material) o.material.side = THREE.DoubleSide; });
+    scene.add(m); model = m; start();
+  }, undefined, (err)=>{ console.warn("GLTF load error", err); });
+  const viewer = {start, stop, dispose, resize};
   viewerRegistry.push(viewer);
   return viewer;
 }
 
-/* ============================================================
-   SHOWCASE — gallery
-============================================================ */
+/* SHOWCASE */
 const showcaseRow = document.getElementById("showcaseRow");
 const showcaseNav = document.getElementById("showcaseNav");
 const showcaseViewers = [];
-
+function rawUrl(path){ if(!path) return ""; return `https://raw.githubusercontent.com/${ghConfig.owner}/${ghConfig.repo}/${ghConfig.branch}/${path}`; }
 function renderShowcase(){
-  showcaseViewers.forEach(v => v.dispose());
-  showcaseViewers.length = 0;
-  showcaseRow.innerHTML = "";
-  showcaseRow.classList.remove("single");
-
-  if (!content.models3d.length) {
-    showcaseRow.innerHTML = `
-      <div class="showcase-empty">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg>
-        <p>Загрузите 3D-модели в админ-панели — они появятся здесь и будут вращаться на 360°</p>
-      </div>`;
-    showcaseNav.style.display = "none";
-    return;
+  showcaseViewers.forEach(v => v.dispose()); showcaseViewers.length = 0;
+  showcaseRow.innerHTML = ""; showcaseRow.classList.remove("single");
+  if(!content.models3d.length){
+    showcaseRow.innerHTML = `<div class="showcase-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg><p>Загрузите 3D-модели в админ-панели — они появятся здесь</p></div>`;
+    showcaseNav.style.display = "none"; return;
   }
-  if (content.models3d.length === 1) showcaseRow.classList.add("single");
+  if(content.models3d.length === 1) showcaseRow.classList.add("single");
   showcaseNav.style.display = content.models3d.length > 1 ? "flex" : "none";
-
   content.models3d.forEach(m => {
     const box = document.createElement("div");
     box.className = "viewer-wrap";
-    box.innerHTML = `
-      <canvas></canvas>
-      ${m.name ? `<div class="viewer-label">${escapeHtml(m.name)}</div>` : ""}
-      <div class="viewer-hint">Тяни · Колесо</div>
-    `;
+    box.innerHTML = `<canvas></canvas>${m.name?`<div class="viewer-label">${escapeHtml(m.name)}</div>`:""}<div class="viewer-hint">Тяни · Колесо</div>`;
     showcaseRow.appendChild(box);
     const canvas = box.querySelector("canvas");
-    const dataURL = assetCache[m.assetKey] || m.data;
-    if (!dataURL) return;
-    const viewer = makeViewer(canvas, dataURL, {
-      controls: true,
-      autorotate: m.autorotate !== "no",
-      speed: parseFloat(m.speed) || 1.5
-    });
+    const src = m.data || (m.path ? rawUrl(m.path) : null);
+    if(!src) return;
+    const viewer = makeViewer(canvas, src, {controls:true, autorotate:m.autorotate !== "no", speed: parseFloat(m.speed) || 1.5});
     showcaseViewers.push(viewer);
   });
   updateShowcaseNav();
 }
-document.getElementById("showcasePrev").addEventListener("click", () => {
-  showcaseRow.scrollBy({ left: -showcaseRow.clientWidth * 0.9, behavior: "smooth" });
-});
-document.getElementById("showcaseNext").addEventListener("click", () => {
-  showcaseRow.scrollBy({ left: showcaseRow.clientWidth * 0.9, behavior: "smooth" });
-});
+document.getElementById("showcasePrev").addEventListener("click",()=>showcaseRow.scrollBy({left:-showcaseRow.clientWidth*0.9,behavior:"smooth"}));
+document.getElementById("showcaseNext").addEventListener("click",()=>showcaseRow.scrollBy({left:showcaseRow.clientWidth*0.9,behavior:"smooth"}));
 function updateShowcaseNav(){
-  const prev = document.getElementById("showcasePrev");
-  const next = document.getElementById("showcaseNext");
+  const prev = document.getElementById("showcasePrev"), next = document.getElementById("showcaseNext");
   const maxScroll = showcaseRow.scrollWidth - showcaseRow.clientWidth;
   prev.disabled = showcaseRow.scrollLeft <= 2;
   next.disabled = showcaseRow.scrollLeft >= maxScroll - 2;
 }
-showcaseRow.addEventListener("scroll", updateShowcaseNav, { passive: true });
+showcaseRow.addEventListener("scroll", updateShowcaseNav, {passive:true});
 window.addEventListener("resize", () => showcaseViewers.forEach(v => v.resize()));
 
-/* ============================================================
-   CARD 3D VIEWERS
-============================================================ */
+/* CARD VIEWERS */
 const activeCardViewers = new Map();
-function initCardViewer(canvasEl, dataURL, productId){
-  if (activeCardViewers.has(productId)) return activeCardViewers.get(productId);
-  if (activeCardViewers.size >= MAX_CARD_VIEWERS) {
+const MAX_CARD_VIEWERS = 6;
+function initCardViewer(canvasEl, src, productId){
+  if(activeCardViewers.has(productId)) return activeCardViewers.get(productId);
+  if(activeCardViewers.size >= MAX_CARD_VIEWERS){
     const firstKey = activeCardViewers.keys().next().value;
     const oldV = activeCardViewers.get(firstKey);
-    if (oldV) oldV.dispose();
+    if(oldV) oldV.dispose();
     activeCardViewers.delete(firstKey);
   }
-  const v = makeViewer(canvasEl, dataURL, { controls: false, autorotate: true, speed: 1.2 });
+  const v = makeViewer(canvasEl, src, {controls:false, autorotate:true, speed:1.2});
   activeCardViewers.set(productId, v);
   return v;
 }
 function disposeCardViewer(productId){
   const v = activeCardViewers.get(productId);
-  if (v) { v.dispose(); activeCardViewers.delete(productId); }
+  if(v){ v.dispose(); activeCardViewers.delete(productId); }
 }
-const cardViewerIO = new IntersectionObserver((entries) => {
-  entries.forEach(entry => {
+const cardViewerIO = new IntersectionObserver((entries)=>{
+  entries.forEach(entry=>{
     const card = entry.target;
     const id = Number(card.dataset.id);
     const product = products.find(p => p.id === id);
-    if (!product) return;
-    const model3dData = product.model3dKey ? assetCache[product.model3dKey] : product.model3d;
+    if(!product) return;
+    const src = product.model3d || (product.model3dPath ? rawUrl(product.model3dPath) : null);
     const canvas = card.querySelector("canvas.card-canvas");
-    if (!canvas || !model3dData) return;
-    if (entry.isIntersecting) {
-      initCardViewer(canvas, model3dData, id);
-    } else {
-      disposeCardViewer(id);
-    }
+    if(!canvas || !src) return;
+    if(entry.isIntersecting) initCardViewer(canvas, src, id);
+    else disposeCardViewer(id);
   });
-}, { threshold: 0.05 });
+}, {threshold:0.05});
 
-/* ============================================================
-   APPLY CONTENT
-============================================================ */
+/* APPLY */
 function applyContent(){
   document.querySelectorAll("[data-edit]").forEach(el=>{
     const key = el.dataset.edit;
@@ -1455,64 +1366,43 @@ function applyContent(){
 }
 
 function renderProducts(){
-  activeCardViewers.forEach((v) => v.dispose());
-  activeCardViewers.clear();
+  activeCardViewers.forEach(v=>v.dispose()); activeCardViewers.clear();
   cardViewerIO.disconnect();
-
   const grid = document.getElementById("grid");
   const filtered = currentFilter==="all"?products:products.filter(p=>p.badge===currentFilter);
   if(!filtered.length){grid.innerHTML=`<div style="grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--muted)">Пусто</div>`;return}
   grid.innerHTML = filtered.map(p=>{
     const badgeLabel = {hit:"Хит",new:"Новинка",limited:"Лимитка"}[p.badge]||"";
-    const model3dData = p.model3dKey ? assetCache[p.model3dKey] : p.model3d;
-    const imageData = p.imageKey ? assetCache[p.imageKey] : p.image;
+    const model3dSrc = p.model3d || (p.model3dPath ? rawUrl(p.model3dPath) : null);
+    const imageSrc = p.image || (p.imagePath ? rawUrl(p.imagePath) : null);
     let visual;
-    if (model3dData) {
-      visual = `<canvas class="card-canvas"></canvas><div class="mini-3d-hint">360°</div>`;
-    } else if (imageData) {
-      visual = `<img src="${imageData}" alt="${escapeHtml(p.title)}">`;
-    } else {
-      visual = SHAPES[p.shape]||SHAPES.cube;
-    }
+    if(model3dSrc) visual = `<canvas class="card-canvas"></canvas><div class="mini-3d-hint">360°</div>`;
+    else if(imageSrc) visual = `<img src="${imageSrc}" alt="${escapeHtml(p.title)}">`;
+    else visual = SHAPES[p.shape]||SHAPES.cube;
     return `<article class="card" data-id="${p.id}">
       ${badgeLabel?`<span class="badge-tag">${badgeLabel}</span>`:""}
-      <div class="admin-controls">
-        <button class="admin-mini" data-action="edit" data-id="${p.id}">${ICONS.edit}</button>
-        <button class="admin-mini danger" data-action="delete" data-id="${p.id}">${ICONS.trash}</button>
-      </div>
-      <div class="card-inner">
-        <div class="visual">${visual}</div>
-        <h3>${escapeHtml(p.title)}</h3>
-        <p class="desc">${escapeHtml(p.desc)}</p>
-        <div class="row">
-          <div class="price">${formatPrice(p.price)} <small>₽</small></div>
-          <div class="card-actions"><button class="circle-btn primary" data-action="buy" data-id="${p.id}">${ICONS.plus}</button></div>
-        </div>
-      </div>
+      <div class="admin-controls"><button class="admin-mini" data-action="edit" data-id="${p.id}">${ICONS.edit}</button><button class="admin-mini danger" data-action="delete" data-id="${p.id}">${ICONS.trash}</button></div>
+      <div class="card-inner"><div class="visual">${visual}</div><h3>${escapeHtml(p.title)}</h3><p class="desc">${escapeHtml(p.desc)}</p>
+      <div class="row"><div class="price">${formatPrice(p.price)} <small>₽</small></div><div class="card-actions"><button class="circle-btn primary" data-action="buy" data-id="${p.id}">${ICONS.plus}</button></div></div></div>
     </article>`;
   }).join("");
-
   requestAnimationFrame(()=>{
     grid.querySelectorAll(".card").forEach((c,i)=>{
       setTimeout(()=>c.classList.add("visible"),60+i*70);
       const id = Number(c.dataset.id);
       const p = products.find(x => x.id === id);
-      const model3dData = p && (p.model3dKey ? assetCache[p.model3dKey] : p.model3d);
-      if (p && model3dData && c.querySelector("canvas.card-canvas")) {
-        cardViewerIO.observe(c);
-      }
+      const hasModel = p && (p.model3d || p.model3dPath);
+      if(hasModel && c.querySelector("canvas.card-canvas")) cardViewerIO.observe(c);
     });
   });
   attachCardEvents();
 }
-
 function attachCardEvents(){
   document.querySelectorAll(".card").forEach(card=>{
     card.addEventListener("mousemove",e=>{
-      if (e.target.tagName === "CANVAS") return;
+      if(e.target.tagName === "CANVAS") return;
       const r=card.getBoundingClientRect();
-      const px=(e.clientX-r.left)/r.width-0.5;
-      const py=(e.clientY-r.top)/r.height-0.5;
+      const px=(e.clientX-r.left)/r.width-0.5, py=(e.clientY-r.top)/r.height-0.5;
       card.style.transform=`perspective(900px) rotateY(${px*6}deg) rotateX(${-py*6}deg) translateY(-4px)`;
     });
     card.addEventListener("mouseleave",()=>card.style.transform="");
@@ -1525,35 +1415,22 @@ function escapeHtml(s){const d=document.createElement("div");d.textContent=s||""
 function formatPrice(n){return Number(n).toLocaleString("ru-RU")}
 
 function renderFeatures(){
-  document.getElementById("featGrid").innerHTML = features.map(f=>`
-    <div class="feat">
-      <div class="icon-wrap">${ICONS[f.icon]||ICONS.bolt}</div>
-      <h4>${escapeHtml(f.title)}</h4>
-      <p>${escapeHtml(f.text)}</p>
-    </div>
-  `).join("");
+  document.getElementById("featGrid").innerHTML = features.map(f=>`<div class="feat"><div class="icon-wrap">${ICONS[f.icon]||ICONS.bolt}</div><h4>${escapeHtml(f.title)}</h4><p>${escapeHtml(f.text)}</p></div>`).join("");
   setTimeout(()=>{
     const io=new IntersectionObserver(es=>{es.forEach((e,i)=>{if(e.isIntersecting){setTimeout(()=>e.target.classList.add("visible"),i*120);io.unobserve(e.target)}})},{threshold:.15});
     document.querySelectorAll(".feat").forEach(f=>io.observe(f));
   },50);
 }
 
-/* ============================================================
-   CART
-============================================================ */
+/* CART */
 const getCartCount = ()=>cart.reduce((s,i)=>s+i.qty,0);
 const getCartTotal = ()=>cart.reduce((s,i)=>s+i.qty*i.price,0);
-
 function addToCart(id, fromEl){
-  const p = products.find(x=>x.id===id);
-  if(!p) return;
+  const p = products.find(x=>x.id===id); if(!p) return;
   const ex = cart.find(i=>i.id===id);
   if(ex) ex.qty++;
-  else cart.push({
-    id:p.id, title:p.title, price:p.price, shape:p.shape,
-    imageKey:p.imageKey||null, image:p.image||null, qty:1
-  });
-  saveCart(); updateCartBadge(true); renderCart();
+  else cart.push({id:p.id,title:p.title,price:p.price,shape:p.shape,image:p.image||null,imagePath:p.imagePath||null,qty:1});
+  saveCart();updateCartBadge(true);renderCart();
   if(fromEl) flyToCart(fromEl, p);
   showMiniCart(p);
 }
@@ -1563,21 +1440,18 @@ function removeFromCart(id){
   if(el){el.classList.add("removing");setTimeout(fin,350)}else fin();
 }
 function setQty(id,qty){
-  const it = cart.find(i=>i.id===id);
-  if(!it) return;
+  const it = cart.find(i=>i.id===id); if(!it) return;
   if(qty<=0){removeFromCart(id);return}
   it.qty=qty;saveCart();updateCartBadge(false);renderCart();
 }
 function updateCartBadge(pulse){
   const b = document.getElementById("cartBadge");
   const n = getCartCount();
-  b.textContent = n;
-  b.classList.toggle("show", n>0);
+  b.textContent = n; b.classList.toggle("show", n>0);
   if(pulse && n>0){b.classList.remove("pulse");void b.offsetWidth;b.classList.add("pulse")}
 }
 function renderCart(){
-  const body = document.getElementById("cartBody");
-  const footer = document.getElementById("cartFooter");
+  const body = document.getElementById("cartBody"), footer = document.getElementById("cartFooter");
   document.getElementById("cartCount").textContent = getCartCount();
   if(!cart.length){
     body.innerHTML = `<div class="cart-empty">${ICONS.cart}<p>Пока пусто. Загляните в каталог.</p><button class="btn btn-ghost" data-cart-close>К каталогу</button></div>`;
@@ -1586,140 +1460,56 @@ function renderCart(){
     return;
   }
   body.innerHTML = cart.map(it=>{
-    const imgData = it.imageKey ? assetCache[it.imageKey] : it.image;
-    const thumb = imgData ? `<img src="${imgData}" alt="">` : (SHAPES[it.shape]||SHAPES.cube);
-    return `<div class="cart-item" data-cart-id="${it.id}">
-      <div class="thumb">${thumb}</div>
-      <div class="info">
-        <div><h4>${escapeHtml(it.title)}</h4><div class="unit-price">${formatPrice(it.price)} ₽ / шт</div></div>
-        <div class="qty">
-          <button data-qty="-1" data-id="${it.id}">${ICONS.minus}</button>
-          <span class="val">${it.qty}</span>
-          <button data-qty="1" data-id="${it.id}">${ICONS.plus}</button>
-        </div>
-      </div>
-      <div class="right">
-        <button class="remove" data-remove="${it.id}">${ICONS.trash}</button>
-        <div class="total">${formatPrice(it.price*it.qty)} ₽</div>
-      </div>
-    </div>`;
+    const src = it.image || (it.imagePath ? rawUrl(it.imagePath) : null);
+    const thumb = src ? `<img src="${src}" alt="">` : (SHAPES[it.shape]||SHAPES.cube);
+    return `<div class="cart-item" data-cart-id="${it.id}"><div class="thumb">${thumb}</div><div class="info"><div><h4>${escapeHtml(it.title)}</h4><div class="unit-price">${formatPrice(it.price)} ₽ / шт</div></div><div class="qty"><button data-qty="-1" data-id="${it.id}">${ICONS.minus}</button><span class="val">${it.qty}</span><button data-qty="1" data-id="${it.id}">${ICONS.plus}</button></div></div><div class="right"><button class="remove" data-remove="${it.id}">${ICONS.trash}</button><div class="total">${formatPrice(it.price*it.qty)} ₽</div></div></div>`;
   }).join("");
   body.querySelectorAll("[data-qty]").forEach(b=>b.addEventListener("click",()=>{
     const id=Number(b.dataset.id),d=Number(b.dataset.qty);
-    const it=cart.find(i=>i.id===id);
-    if(it) setQty(id,it.qty+d);
+    const it=cart.find(i=>i.id===id); if(it) setQty(id,it.qty+d);
   }));
   body.querySelectorAll("[data-remove]").forEach(b=>b.addEventListener("click",()=>removeFromCart(Number(b.dataset.remove))));
   const total = getCartTotal();
-  footer.innerHTML = `<div class="cart-total"><span class="label">Итого</span><span class="value">${formatPrice(total)}<small>₽</small></span></div>
-    <div class="cart-note">Доставка рассчитывается на следующем шаге.</div>
-    <button class="btn btn-primary" id="checkoutBtn">Оформить заказ
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-    </button>`;
+  footer.innerHTML = `<div class="cart-total"><span class="label">Итого</span><span class="value">${formatPrice(total)}<small>₽</small></span></div><div class="cart-note">Доставка рассчитывается на следующем шаге.</div><button class="btn btn-primary" id="checkoutBtn">Оформить заказ<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>`;
   document.getElementById("checkoutBtn").addEventListener("click",openCheckout);
 }
 function flyToCart(fromEl, p){
   const cartBtn = document.getElementById("cartBtn");
-  const fr = fromEl.getBoundingClientRect();
-  const tr = cartBtn.getBoundingClientRect();
-  const fly = document.createElement("div");
-  fly.className = "fly-item";
-  const imgData = p.imageKey ? assetCache[p.imageKey] : p.image;
-  fly.innerHTML = imgData ? `<img src="${imgData}" alt="">` : (SHAPES[p.shape]||SHAPES.cube);
+  const fr = fromEl.getBoundingClientRect(), tr = cartBtn.getBoundingClientRect();
+  const fly = document.createElement("div"); fly.className = "fly-item";
+  const src = p.image || (p.imagePath ? rawUrl(p.imagePath) : null);
+  fly.innerHTML = src ? `<img src="${src}" alt="">` : (SHAPES[p.shape]||SHAPES.cube);
   const s = 60;
   fly.style.cssText += `width:${s}px;height:${s}px;left:${fr.left+fr.width/2-s/2}px;top:${fr.top+fr.height/2-s/2}px;opacity:1`;
   document.body.appendChild(fly);
-  const dx = (tr.left+tr.width/2)-(fr.left+fr.width/2);
-  const dy = (tr.top+tr.height/2)-(fr.top+fr.height/2);
-  requestAnimationFrame(()=>{
-    fly.style.transform = `translate(${dx}px,${dy}px) scale(0.3) rotate(360deg)`;
-    fly.style.opacity = "0";
-  });
+  const dx = (tr.left+tr.width/2)-(fr.left+fr.width/2), dy = (tr.top+tr.height/2)-(fr.top+fr.height/2);
+  requestAnimationFrame(()=>{ fly.style.transform = `translate(${dx}px,${dy}px) scale(0.3) rotate(360deg)`; fly.style.opacity = "0"; });
   setTimeout(()=>fly.remove(),950);
 }
 
-/* ============================================================
-   MINI-CART
-============================================================ */
+/* MINI-CART */
 const miniCartEl = document.getElementById("miniCart");
-const miniCartBody = document.getElementById("miniCartBody");
-const miniCartText = document.getElementById("miniCartText");
-const miniCartSub = document.getElementById("miniCartSub");
 let miniCartTimer = null;
-
 function showMiniCart(product){
-  const total = getCartTotal();
-  const count = getCartCount();
-
-  // Заголовок
-  miniCartText.innerHTML = `Товар добавлен<small id="miniCartSub">${count} ${plural(count, "товар", "товара", "товаров")} · ${formatPrice(total)} ₽</small>`;
-
-  // Текущий товар
-  const imgData = product.imageKey ? assetCache[product.imageKey] : product.image;
-  const thumb = imgData ? `<img src="${imgData}" alt="">` : (SHAPES[product.shape]||SHAPES.cube);
-
-  // Общее количество того же товара
+  const total = getCartTotal(), count = getCartCount();
+  document.getElementById("miniCartText").innerHTML = `Товар добавлен<small>${count} ${plural(count,"товар","товара","товаров")} · ${formatPrice(total)} ₽</small>`;
+  const src = product.image || (product.imagePath ? rawUrl(product.imagePath) : null);
+  const thumb = src ? `<img src="${src}" alt="">` : (SHAPES[product.shape]||SHAPES.cube);
   const cartItem = cart.find(i => i.id === product.id);
   const qty = cartItem ? cartItem.qty : 1;
-
-  miniCartBody.innerHTML = `
-    <div class="mini-cart-item">
-      <div class="mini-thumb">${thumb}</div>
-      <div class="mini-info">
-        <h5>${escapeHtml(product.title)}</h5>
-        <span>${formatPrice(product.price)} ₽ × ${qty}</span>
-      </div>
-      <div class="mini-price">${formatPrice(product.price * qty)} ₽</div>
-    </div>
-    <div class="mini-cart-total">
-      <span class="label">Итого</span>
-      <span class="value">${formatPrice(total)}<small>₽</small></span>
-    </div>
-    <div class="mini-cart-actions">
-      <button class="mini-btn ghost" id="miniCartOpen">В корзину</button>
-      <button class="mini-btn primary" id="miniCartCheckout">
-        Оформить
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      </button>
-    </div>
-  `;
-
+  document.getElementById("miniCartBody").innerHTML = `
+    <div class="mini-cart-item"><div class="mini-thumb">${thumb}</div><div class="mini-info"><h5>${escapeHtml(product.title)}</h5><span>${formatPrice(product.price)} ₽ × ${qty}</span></div><div class="mini-price">${formatPrice(product.price*qty)} ₽</div></div>
+    <div class="mini-cart-total"><span class="label">Итого</span><span class="value">${formatPrice(total)}<small>₽</small></span></div>
+    <div class="mini-cart-actions"><button class="mini-btn ghost" id="miniCartOpen">В корзину</button><button class="mini-btn primary" id="miniCartCheckout">Оформить<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>`;
   miniCartEl.classList.add("show");
-  miniCartEl.setAttribute("aria-hidden", "false");
-
-  // Перезапуск анимации прогресс-полоски
-  const before = miniCartEl.querySelector("::before");
-  miniCartEl.style.setProperty("--restart", Date.now());
-
-  // Кнопки
-  document.getElementById("miniCartOpen").addEventListener("click", () => {
-    hideMiniCart();
-    openCart();
-  });
-  document.getElementById("miniCartCheckout").addEventListener("click", () => {
-    hideMiniCart();
-    openCheckout();
-  });
-
-  // Авто-скрытие через 4.5 сек
+  document.getElementById("miniCartOpen").addEventListener("click",()=>{hideMiniCart();openCart()});
+  document.getElementById("miniCartCheckout").addEventListener("click",()=>{hideMiniCart();openCheckout()});
   clearTimeout(miniCartTimer);
   miniCartTimer = setTimeout(hideMiniCart, 4500);
 }
-
-function hideMiniCart(){
-  miniCartEl.classList.remove("show");
-  miniCartEl.setAttribute("aria-hidden", "true");
-  clearTimeout(miniCartTimer);
-}
-
-document.getElementById("miniCartClose").addEventListener("click", hideMiniCart);
-
-function plural(n, one, few, many){
-  const m10 = n % 10, m100 = n % 100;
-  if(m10 === 1 && m100 !== 11) return one;
-  if(m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
-  return many;
-}
+function hideMiniCart(){ miniCartEl.classList.remove("show"); clearTimeout(miniCartTimer); }
+document.getElementById("miniCartClose").addEventListener("click",hideMiniCart);
+function plural(n,a,b,c){const m10=n%10,m100=n%100;if(m10===1&&m100!==11)return a;if(m10>=2&&m10<=4&&(m100<10||m100>=20))return b;return c}
 
 /* CART DRAWER */
 const cartDrawer = document.getElementById("cartDrawer");
@@ -1755,35 +1545,28 @@ function logoutAdmin(){
   document.body.classList.remove("is-admin","edit-mode");
   editMode = false;
   document.querySelectorAll("[data-edit]").forEach(el=>el.removeAttribute("contenteditable"));
-  closeAdminPanel();
-  renderProducts();
-  showToast("Вы вышли из режима админа");
+  closeAdminPanel(); renderProducts(); showToast("Вы вышли из режима админа");
 }
 let logoClicks = 0, logoTimer = null;
 document.getElementById("logo").addEventListener("click",(e)=>{
   e.preventDefault();
   if(document.body.classList.contains("edit-mode")) return;
-  logoClicks++;
-  clearTimeout(logoTimer);
+  logoClicks++; clearTimeout(logoTimer);
   logoTimer = setTimeout(()=>logoClicks = 0, 700);
   if(logoClicks >= 3){
-    logoClicks = 0;
-    clearTimeout(logoTimer);
+    logoClicks = 0; clearTimeout(logoTimer);
     if(!isAdmin) openLogin();
     else if(!adminPanel.classList.contains("open")) openAdminPanel();
     else logoutAdmin();
   }
 });
-document.getElementById("adminBadge").addEventListener("click",()=>{
-  if(isAdmin && !adminPanel.classList.contains("open")) openAdminPanel();
-});
+document.getElementById("adminBadge").addEventListener("click",()=>{ if(isAdmin && !adminPanel.classList.contains("open")) openAdminPanel(); });
 document.getElementById("loginSubmit").addEventListener("click",()=>{
   if(document.getElementById("adminPass").value === ADMIN_PASSWORD){
     isAdmin = true;
     sessionStorage.setItem(SS_ADMIN,"1");
     document.body.classList.add("is-admin");
-    closeModal(loginModal);
-    renderProducts();
+    closeModal(loginModal); renderProducts();
     showToast("Добро пожаловать, супер-админ");
     setTimeout(()=>openAdminPanel(), 250);
   } else {
@@ -1797,62 +1580,45 @@ document.getElementById("adminPass").addEventListener("keydown",e=>{if(e.key==="
 const adminPanel = document.getElementById("adminPanel");
 const adminPopup = document.getElementById("adminPopup");
 const adminPopupHeader = document.getElementById("adminPopupHeader");
-let adminOffset = { x: 0, y: 0 };
-let dragState = null;
-function updatePopupTransform(){
-  adminPopup.style.transform = `translate(calc(-50% + ${adminOffset.x}px), calc(-50% + ${adminOffset.y}px)) scale(1)`;
-}
+let adminOffset = {x:0,y:0}, dragState = null;
 function openAdminPanel(){
   if(!isAdmin) return;
-  syncAdminFields();
-  renderAdminProductsList();
-  renderAdminFeaturesList();
-  renderAdminModelsList();
-  adminOffset = { x: 0, y: 0 };
-  adminPopup.style.transform = "";
-  adminPanel.classList.add("open");
-  document.body.classList.add("no-scroll");
+  syncAdminFields(); syncGhFields();
+  renderAdminProductsList(); renderAdminFeaturesList(); renderAdminModelsList();
+  adminOffset = {x:0,y:0}; adminPopup.style.transform = "";
+  adminPanel.classList.add("open"); document.body.classList.add("no-scroll");
 }
 function closeAdminPanel(){
   adminPanel.classList.remove("open");
   if(!document.querySelector(".modal.open")&&!cartDrawer.classList.contains("open")) document.body.classList.remove("no-scroll");
 }
 document.querySelectorAll("[data-admin-close]").forEach(el=>el.addEventListener("click",closeAdminPanel));
-document.getElementById("logoutBtn").addEventListener("click",()=>{
-  if(confirm("Выйти из режима админа?")) logoutAdmin();
-});
+document.getElementById("logoutBtn").addEventListener("click",()=>{ if(confirm("Выйти из режима админа?")) logoutAdmin(); });
+document.getElementById("publishBtn").addEventListener("click",publishAll);
 adminPopupHeader.addEventListener("pointerdown",(e)=>{
   if(e.target.closest("button")) return;
   if(window.innerWidth < 720) return;
-  dragState = {pointerId: e.pointerId,startX: e.clientX,startY: e.clientY,offsetX: adminOffset.x,offsetY: adminOffset.y};
+  dragState = {pointerId:e.pointerId,startX:e.clientX,startY:e.clientY,offsetX:adminOffset.x,offsetY:adminOffset.y};
   adminPopupHeader.setPointerCapture(e.pointerId);
-  adminPopup.classList.add("dragging");
-  document.body.classList.add("no-select");
+  adminPopup.classList.add("dragging"); document.body.classList.add("no-select");
 });
 adminPopupHeader.addEventListener("pointermove",(e)=>{
   if(!dragState) return;
-  const dx = e.clientX - dragState.startX;
-  const dy = e.clientY - dragState.startY;
-  let nx = dragState.offsetX + dx;
-  let ny = dragState.offsetY + dy;
-  const halfW = adminPopup.offsetWidth / 2;
-  const halfH = adminPopup.offsetHeight / 2;
-  const minX = 8 - window.innerWidth/2 + halfW;
-  const maxX = window.innerWidth - 8 - window.innerWidth/2 - halfW;
-  const minY = 8 - window.innerHeight/2 + halfH;
-  const maxY = window.innerHeight - 8 - window.innerHeight/2 - halfH;
-  if(minX <= maxX) nx = Math.max(minX, Math.min(maxX, nx)); else nx = (minX + maxX) / 2;
-  if(minY <= maxY) ny = Math.max(minY, Math.min(maxY, ny)); else ny = (minY + maxY) / 2;
-  adminOffset.x = nx;
-  adminOffset.y = ny;
-  updatePopupTransform();
+  const dx = e.clientX - dragState.startX, dy = e.clientY - dragState.startY;
+  let nx = dragState.offsetX + dx, ny = dragState.offsetY + dy;
+  const halfW = adminPopup.offsetWidth/2, halfH = adminPopup.offsetHeight/2;
+  const minX = 8 - window.innerWidth/2 + halfW, maxX = window.innerWidth - 8 - window.innerWidth/2 - halfW;
+  const minY = 8 - window.innerHeight/2 + halfH, maxY = window.innerHeight - 8 - window.innerHeight/2 - halfH;
+  if(minX <= maxX) nx = Math.max(minX, Math.min(maxX, nx)); else nx = (minX+maxX)/2;
+  if(minY <= maxY) ny = Math.max(minY, Math.min(maxY, ny)); else ny = (minY+maxY)/2;
+  adminOffset.x = nx; adminOffset.y = ny;
+  adminPopup.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px)) scale(1)`;
 });
 function endDrag(){
   if(!dragState) return;
-  try{ adminPopupHeader.releasePointerCapture(dragState.pointerId); }catch(err){}
+  try{ adminPopupHeader.releasePointerCapture(dragState.pointerId); }catch(e){}
   dragState = null;
-  adminPopup.classList.remove("dragging");
-  document.body.classList.remove("no-select");
+  adminPopup.classList.remove("dragging"); document.body.classList.remove("no-select");
 }
 adminPopupHeader.addEventListener("pointerup", endDrag);
 adminPopupHeader.addEventListener("pointercancel", endDrag);
@@ -1868,8 +1634,8 @@ document.querySelectorAll(".admin-tab").forEach(tab=>{
 function syncAdminFields(){
   document.querySelectorAll("[data-bind]").forEach(el=>{
     const k = el.dataset.bind;
-    if(k==="ticker_items"){el.value = content[k]||"";return}
-    if(el.tagName==="SELECT"||el.tagName==="INPUT"||el.tagName==="TEXTAREA"){
+    if(k === "ticker_items"){el.value = content[k]||"";return}
+    if(el.tagName === "SELECT" || el.tagName === "INPUT" || el.tagName === "TEXTAREA"){
       el.value = content[k] !== undefined ? content[k] : "";
     }
   });
@@ -1878,9 +1644,52 @@ document.querySelectorAll("[data-bind]").forEach(el=>{
   el.addEventListener("input",()=>{
     const k = el.dataset.bind;
     content[k] = el.value;
-    saveContent();
-    applyContent();
+    saveContent(); applyContent(); markDirty();
   });
+});
+
+/* GITHUB SETTINGS */
+function syncGhFields(){
+  document.getElementById("ghOwner").value = ghConfig.owner || "";
+  document.getElementById("ghRepo").value = ghConfig.repo || "";
+  document.getElementById("ghBranch").value = ghConfig.branch || "main";
+  document.getElementById("ghToken").value = ghConfig.token || "";
+  updateGhStatus();
+}
+function updateGhStatus(){
+  const box = document.getElementById("ghSetup");
+  const title = document.getElementById("ghStatusTitle");
+  const text = document.getElementById("ghStatusText");
+  if(ghReady()){
+    box.className = "gh-setup ok";
+    title.textContent = "Подключено к GitHub";
+    text.innerHTML = `Репозиторий: <b>${ghConfig.owner}/${ghConfig.repo}</b><br>Ветка: <b>${ghConfig.branch}</b>`;
+  } else {
+    box.className = "gh-setup bad";
+    title.textContent = "Не подключено к GitHub";
+    text.textContent = "Заполните поля ниже, чтобы редактор мог публиковать изменения на сайт.";
+  }
+}
+document.getElementById("ghSave").addEventListener("click",async()=>{
+  const owner = document.getElementById("ghOwner").value.trim();
+  const repo = document.getElementById("ghRepo").value.trim();
+  const branch = document.getElementById("ghBranch").value.trim() || "main";
+  const token = document.getElementById("ghToken").value.trim();
+  if(!owner || !repo || !token){ showToast("Заполните все поля"); return; }
+  ghConfig = {owner, repo, branch, token};
+  localStorage.setItem(LS_GH, JSON.stringify(ghConfig));
+  try{
+    const r = await fetch(`${GH_API}/repos/${owner}/${repo}`, {headers: ghHeaders()});
+    if(!r.ok) throw new Error("Не удалось получить доступ. Проверьте owner/repo/token.");
+    updateGhStatus();
+    showToast("Подключено! Теперь можно публиковать");
+    updateStatus("ok", "GitHub подключён");
+  }catch(e){ showToast(e.message); updateStatus("error", e.message); }
+});
+document.getElementById("ghClear").addEventListener("click",()=>{
+  if(!confirm("Забыть токен и настройки GitHub?")) return;
+  ghConfig = {owner:"",repo:"",branch:"main",token:""};
+  localStorage.removeItem(LS_GH); syncGhFields(); updateGhStatus(); showToast("Токен забыт");
 });
 
 /* INLINE EDIT */
@@ -1889,8 +1698,8 @@ function toggleEditMode(){
   editMode = !editMode;
   document.body.classList.toggle("edit-mode", editMode);
   document.querySelectorAll("[data-edit]").forEach(el=>{
-    if(editMode){el.setAttribute("contenteditable","true")}
-    else {el.removeAttribute("contenteditable")}
+    if(editMode) el.setAttribute("contenteditable","true");
+    else el.removeAttribute("contenteditable");
   });
   showToast(editMode ? "Кликните по тексту чтобы редактировать" : "Изменения сохранены");
 }
@@ -1899,107 +1708,69 @@ document.addEventListener("blur",(e)=>{
   if(editMode && e.target.hasAttribute && e.target.hasAttribute("data-edit")){
     const key = e.target.dataset.edit;
     content[key] = e.target.textContent.trim();
-    saveContent();
+    saveContent(); markDirty();
   }
 },true);
 
 /* ADMIN — 3D MODELS LIST */
 function renderAdminModelsList(){
   const list = document.getElementById("adminModelsList");
-  if (!content.models3d.length) {
-    list.innerHTML = `<div class="admin-hint" style="text-align:center;padding:20px">Пока нет моделей. Загрузите первую через зону выше.</div>`;
-    return;
-  }
-  list.innerHTML = content.models3d.map((m, i) => `
+  if(!content.models3d.length){ list.innerHTML = `<div class="admin-hint" style="text-align:center;padding:20px">Пока нет моделей.</div>`; return; }
+  list.innerHTML = content.models3d.map((m,i)=>`
     <div class="admin-row" style="flex-direction:column;align-items:stretch;gap:10px">
       <div style="display:flex;gap:10px;align-items:center">
-        <div class="thumb-small">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="0.9" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg>
-        </div>
-        <div class="info">
-          <h5>${escapeHtml(m.name || ("Модель " + (i+1)))}</h5>
-          <p>${m.assetKey ? "IndexedDB" : "встроенная"}</p>
-        </div>
-        <div class="actions">
-          <button class="danger" data-del-model="${m.id}" title="Удалить">${ICONS.trash}</button>
-        </div>
+        <div class="thumb-small"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="0.9" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg></div>
+        <div class="info"><h5>${escapeHtml(m.name||("Модель "+(i+1)))}</h5><p>${m.path ? "на GitHub" : "новая, не опубликована"}</p></div>
+        <div class="actions"><button class="danger" data-del-model="${m.id}">${ICONS.trash}</button></div>
       </div>
       <input type="text" value="${escapeHtml(m.name||"")}" data-model-name="${m.id}" placeholder="Название модели" style="padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:13px;outline:none">
       <div style="display:flex;gap:8px">
         <select data-model-autorotate="${m.id}" style="flex:1;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:13px;outline:none">
-          <option value="yes" ${m.autorotate !== "no" ? "selected" : ""}>Авто-вращение: Да</option>
-          <option value="no" ${m.autorotate === "no" ? "selected" : ""}>Авто-вращение: Нет</option>
+          <option value="yes" ${m.autorotate!=="no"?"selected":""}>Авто: Да</option>
+          <option value="no" ${m.autorotate==="no"?"selected":""}>Авто: Нет</option>
         </select>
-        <input type="number" min="0.5" max="10" step="0.5" value="${m.speed||1.5}" data-model-speed="${m.id}" placeholder="Скорость" style="flex:1;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:13px;outline:none">
+        <input type="number" min="0.5" max="10" step="0.5" value="${m.speed||1.5}" data-model-speed="${m.id}" style="flex:1;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:13px;outline:none">
       </div>
     </div>
   `).join("");
-
-  list.querySelectorAll("[data-del-model]").forEach(b=>b.addEventListener("click", async () => {
+  list.querySelectorAll("[data-del-model]").forEach(b=>b.addEventListener("click",()=>{
     const id = Number(b.dataset.delModel);
     if(!confirm("Удалить эту модель из галереи?")) return;
-    const m = content.models3d.find(x => x.id === id);
-    if(m?.assetKey) await idbDel(m.assetKey);
     content.models3d = content.models3d.filter(m => m.id !== id);
-    saveContent(); renderAdminModelsList(); renderShowcase();
-    showToast("Модель удалена");
+    saveContent(); renderAdminModelsList(); renderShowcase(); markDirty();
   }));
   list.querySelectorAll("[data-model-name]").forEach(el=>el.addEventListener("input",()=>{
     const id = Number(el.dataset.modelName);
     const m = content.models3d.find(x => x.id === id);
-    if(m){ m.name = el.value; saveContent(); renderShowcase(); }
+    if(m){ m.name = el.value; saveContent(); renderShowcase(); markDirty(); }
   }));
   list.querySelectorAll("[data-model-autorotate]").forEach(el=>el.addEventListener("change",()=>{
     const id = Number(el.dataset.modelAutorotate);
     const m = content.models3d.find(x => x.id === id);
-    if(m){ m.autorotate = el.value; saveContent(); renderShowcase(); }
+    if(m){ m.autorotate = el.value; saveContent(); renderShowcase(); markDirty(); }
   }));
   list.querySelectorAll("[data-model-speed]").forEach(el=>el.addEventListener("input",()=>{
     const id = Number(el.dataset.modelSpeed);
     const m = content.models3d.find(x => x.id === id);
-    if(m){ m.speed = el.value; saveContent(); renderShowcase(); }
+    if(m){ m.speed = el.value; saveContent(); renderShowcase(); markDirty(); }
   }));
 }
-
-/* Showcase upload */
 const showcaseInput = document.getElementById("showcaseInput");
 const showcaseDropzone = document.getElementById("showcaseDropzone");
-showcaseDropzone.addEventListener("click", () => showcaseInput.click());
-["dragenter","dragover"].forEach(ev => showcaseDropzone.addEventListener(ev, e => { e.preventDefault(); showcaseDropzone.classList.add("dragover"); }));
-["dragleave","drop"].forEach(ev => showcaseDropzone.addEventListener(ev, e => { e.preventDefault(); showcaseDropzone.classList.remove("dragover"); }));
-showcaseDropzone.addEventListener("drop", e => {
-  const files = Array.from(e.dataTransfer.files || []);
-  files.forEach(handleShowcaseFile);
-});
-showcaseInput.addEventListener("change", e => {
-  Array.from(e.target.files || []).forEach(handleShowcaseFile);
-  showcaseInput.value = "";
-});
-
+showcaseDropzone.addEventListener("click",()=>showcaseInput.click());
+["dragenter","dragover"].forEach(ev=>showcaseDropzone.addEventListener(ev,e=>{e.preventDefault();showcaseDropzone.classList.add("dragover")}));
+["dragleave","drop"].forEach(ev=>showcaseDropzone.addEventListener(ev,e=>{e.preventDefault();showcaseDropzone.classList.remove("dragover")}));
+showcaseDropzone.addEventListener("drop",e=>{ Array.from(e.dataTransfer.files||[]).forEach(handleShowcaseFile); });
+showcaseInput.addEventListener("change",e=>{ Array.from(e.target.files||[]).forEach(handleShowcaseFile); showcaseInput.value = ""; });
 function handleShowcaseFile(file){
   if(!/\.(glb|gltf)$/i.test(file.name)){ showToast("Только .glb или .gltf"); return; }
-  if(file.size > 8*1024*1024){ if(!confirm(`«${file.name}» больше 8 МБ. Может подтормаживать. Продолжить?`)) return; }
+  if(file.size > 50*1024*1024){ if(!confirm(`«${file.name}» больше 50 МБ. Продолжить?`)) return; }
   const reader = new FileReader();
-  reader.onload = async ev => {
-    try{
-      const newId = content.models3d.length ? Math.max(...content.models3d.map(m=>m.id))+1 : 1;
-      const assetKey = "model3d_" + newId;
-      await idbSet(assetKey, ev.target.result);
-      content.models3d.push({
-        id: newId,
-        name: file.name.replace(/\.(glb|gltf)$/i,""),
-        assetKey,
-        autorotate: "yes",
-        speed: "1.5"
-      });
-      saveContent();
-      renderAdminModelsList();
-      renderShowcase();
-      showToast("Модель добавлена");
-    }catch(err){
-      console.error(err);
-      showToast("Ошибка загрузки");
-    }
+  reader.onload = ev=>{
+    const newId = content.models3d.length ? Math.max(...content.models3d.map(m=>m.id))+1 : 1;
+    content.models3d.push({id:newId,name:file.name.replace(/\.(glb|gltf)$/i,""),data:ev.target.result,autorotate:"yes",speed:"1.5"});
+    saveContent(); renderAdminModelsList(); renderShowcase(); markDirty();
+    showToast("Модель добавлена — не забудьте Опубликовать");
   };
   reader.readAsDataURL(file);
 }
@@ -2009,32 +1780,22 @@ const editModal = document.getElementById("editModal");
 const confirmModal = document.getElementById("confirmModal");
 function openEditModal(id){
   editingId = id || null;
-  pendingPhoto = null;
-  pendingModel3d = null;
-  pendingPhotoRemoved = false;
-  pendingModelRemoved = false;
-  const pT = document.getElementById("pTitle");
-  const pD = document.getElementById("pDesc");
-  const pP = document.getElementById("pPrice");
-  const pS = document.getElementById("pShape");
-  const pB = document.getElementById("pBadge");
+  pendingPhoto = null; pendingModel3d = null;
+  pendingPhotoRemoved = false; pendingModelRemoved = false;
+  const pT = document.getElementById("pTitle"), pD = document.getElementById("pDesc");
+  const pP = document.getElementById("pPrice"), pS = document.getElementById("pShape"), pB = document.getElementById("pBadge");
   if(editingId){
-    const p = products.find(x=>x.id===editingId);
-    if(!p) return;
+    const p = products.find(x=>x.id===editingId); if(!p) return;
     document.getElementById("editTitle").textContent = "Редактировать модель";
     pT.value = p.title; pD.value = p.desc; pP.value = p.price; pS.value = p.shape; pB.value = p.badge||"";
-    const imgData = p.imageKey ? assetCache[p.imageKey] : p.image;
-    const mdlData = p.model3dKey ? assetCache[p.model3dKey] : p.model3d;
-    pendingPhoto = imgData || null;
-    pendingModel3d = mdlData || null;
+    pendingPhoto = p.image || (p.imagePath ? rawUrl(p.imagePath) : null);
+    pendingModel3d = p.model3d || (p.model3dPath ? rawUrl(p.model3dPath) : null);
   } else {
     document.getElementById("editTitle").textContent = "Добавить модель";
     pT.value="";pD.value="";pP.value="";pS.value="cube";pB.value="";
   }
-  updatePhotoPreview();
-  update3dPreview();
-  openModal(editModal);
-  setTimeout(()=>pT.focus(),300);
+  updatePhotoPreview(); update3dPreview();
+  openModal(editModal); setTimeout(()=>pT.focus(),300);
 }
 function updatePhotoPreview(){
   const prev = document.getElementById("productPhotoPreview");
@@ -2043,23 +1804,11 @@ function updatePhotoPreview(){
 }
 function update3dPreview(){
   const prev = document.getElementById("product3dPreview");
-  if(pendingModel3d) {
-    prev.innerHTML = `<div class="placeholder" style="color:var(--accent)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg>
-      3D-модель загружена<br><small style="color:var(--muted);font-size:11px">Будет крутиться в карточке</small>
-    </div>`;
-  } else {
-    prev.innerHTML = `<div class="placeholder">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg>
-      Нет 3D-модели
-    </div>`;
-  }
+  if(pendingModel3d) prev.innerHTML = `<div class="placeholder" style="color:var(--accent)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg>3D-модель загружена<br><small style="color:var(--muted);font-size:11px">Будет крутиться в карточке</small></div>`;
+  else prev.innerHTML = `<div class="placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M12 2 22 7v10l-10 5L2 17V7z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg>Нет 3D-модели</div>`;
 }
-
 document.getElementById("fabAdd").addEventListener("click",()=>openEditModal(null));
 document.getElementById("addProductBtn").addEventListener("click",()=>{closeAdminPanel();openEditModal(null)});
-
-/* Photo upload */
 const photoInput = document.getElementById("photoInput");
 const photoDropzone = document.getElementById("photoDropzone");
 photoDropzone.addEventListener("click",()=>photoInput.click());
@@ -2072,22 +1821,31 @@ async function handlePhotoFile(file){
   try{
     showToast("Сжимаю фото...");
     const compressed = await compressImage(file, 900, 0.78);
-    pendingPhoto = compressed;
-    pendingPhotoRemoved = false;
-    updatePhotoPreview();
-  }catch(e){
-    console.error(e);
-    showToast("Ошибка обработки фото");
-  }
+    pendingPhoto = compressed; pendingPhotoRemoved = false; updatePhotoPreview();
+  }catch(e){ console.error(e); showToast("Ошибка обработки фото"); }
 }
-document.getElementById("removePhoto").addEventListener("click",()=>{
-  pendingPhoto = null;
-  pendingPhotoRemoved = true;
-  photoInput.value = "";
-  updatePhotoPreview();
-});
+function compressImage(file, maxSize=900, quality=0.78){
+  return new Promise((res, rej)=>{
+    const reader = new FileReader();
+    reader.onload = e=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let {width, height} = img;
+        if(width>maxSize || height>maxSize){
+          if(width>height){ height = Math.round(height*maxSize/width); width = maxSize; }
+          else { width = Math.round(width*maxSize/height); height = maxSize; }
+        }
+        const c = document.createElement("canvas"); c.width = width; c.height = height;
+        c.getContext("2d").drawImage(img, 0, 0, width, height);
+        res(c.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = rej; img.src = e.target.result;
+    };
+    reader.onerror = rej; reader.readAsDataURL(file);
+  });
+}
+document.getElementById("removePhoto").addEventListener("click",()=>{pendingPhoto = null; pendingPhotoRemoved = true; photoInput.value = ""; updatePhotoPreview()});
 
-/* 3D upload in product */
 const model3dInput = document.getElementById("model3dInput");
 const model3dDropzone = document.getElementById("model3dDropzone");
 model3dDropzone.addEventListener("click",()=>model3dInput.click());
@@ -2097,123 +1855,71 @@ model3dInput.addEventListener("change",e=>{const file = e.target.files[0];if(fil
 model3dDropzone.addEventListener("drop",e=>{const f = e.dataTransfer.files[0];if(f)handleProduct3dFile(f)});
 function handleProduct3dFile(file){
   if(!/\.(glb|gltf)$/i.test(file.name)){ showToast("Только .glb или .gltf"); return; }
-  if(file.size > 8*1024*1024){ if(!confirm("Модель >8МБ. Продолжить?")) return; }
+  if(file.size > 50*1024*1024){ if(!confirm("Модель >50МБ. Продолжить?")) return; }
   const reader = new FileReader();
-  reader.onload = e => {
-    pendingModel3d = e.target.result;
-    pendingModelRemoved = false;
-    update3dPreview();
-    showToast("3D готово к сохранению");
-  };
+  reader.onload = e=>{pendingModel3d = e.target.result; pendingModelRemoved = false; update3dPreview(); showToast("3D готово к сохранению")};
   reader.readAsDataURL(file);
 }
-document.getElementById("removeModel3d").addEventListener("click",()=>{
-  pendingModel3d = null;
-  pendingModelRemoved = true;
-  model3dInput.value = "";
-  update3dPreview();
-});
+document.getElementById("removeModel3d").addEventListener("click",()=>{pendingModel3d = null; pendingModelRemoved = true; model3dInput.value = ""; update3dPreview()});
 
-document.getElementById("saveProduct").addEventListener("click", async () => {
+document.getElementById("saveProduct").addEventListener("click",()=>{
   const title = document.getElementById("pTitle").value.trim();
   const desc = document.getElementById("pDesc").value.trim();
   const price = Number(document.getElementById("pPrice").value)||0;
   const shape = document.getElementById("pShape").value;
   const badge = document.getElementById("pBadge").value;
   if(!title){document.getElementById("pTitle").focus();showToast("Введите название");return}
-
   let id = editingId;
   if(!id){ id = products.length ? Math.max(...products.map(p=>p.id))+1 : 1; }
-
-  try{
-    const existing = editingId ? products.find(x=>x.id===editingId) : null;
-
-    // Save photo
-    let imageKey = existing?.imageKey || null;
-    if(pendingPhoto){
-      imageKey = "pimage_" + id;
-      await idbSet(imageKey, pendingPhoto);
-    } else if(pendingPhotoRemoved && imageKey){
-      await idbDel(imageKey);
-      imageKey = null;
-    }
-
-    // Save 3D
-    let model3dKey = existing?.model3dKey || null;
-    if(pendingModel3d){
-      model3dKey = "pmodel_" + id;
-      await idbSet(model3dKey, pendingModel3d);
-    } else if(pendingModelRemoved && model3dKey){
-      await idbDel(model3dKey);
-      model3dKey = null;
-    }
-
-    if(editingId){
-      if(existing) Object.assign(existing, {title, desc, price, shape, badge, imageKey, model3dKey});
-      showToast("Модель обновлена");
-    } else {
-      products.push({id, title, desc, price, shape, badge, imageKey, model3dKey});
-      showToast("Модель добавлена");
-    }
-
-    saveProducts();
-    closeModal(editModal);
-    renderProducts();
-    renderAdminProductsList();
-  }catch(e){
-    console.error(e);
-    showToast("Ошибка сохранения");
+  const existing = editingId ? products.find(x=>x.id===editingId) : null;
+  let image = existing?.image || null, imagePath = existing?.imagePath || null;
+  let model3d = existing?.model3d || null, model3dPath = existing?.model3dPath || null;
+  if(pendingPhoto && pendingPhoto.startsWith("data:")){ image = pendingPhoto; imagePath = null; }
+  else if(pendingPhoto && pendingPhoto.startsWith("http")){ image = null; imagePath = existing?.imagePath || null; }
+  else if(pendingPhotoRemoved){ image = null; imagePath = null; }
+  if(pendingModel3d && pendingModel3d.startsWith("data:")){ model3d = pendingModel3d; model3dPath = null; }
+  else if(pendingModel3d && pendingModel3d.startsWith("http")){ model3d = null; model3dPath = existing?.model3dPath || null; }
+  else if(pendingModelRemoved){ model3d = null; model3dPath = null; }
+  if(editingId){
+    if(existing) Object.assign(existing, {title, desc, price, shape, badge, image, imagePath, model3d, model3dPath});
+    showToast("Модель обновлена");
+  } else {
+    products.push({id, title, desc, price, shape, badge, image, imagePath, model3d, model3dPath});
+    showToast("Модель добавлена");
   }
+  saveProducts(); closeModal(editModal); renderProducts(); renderAdminProductsList(); markDirty();
 });
-
 function openConfirm(id){
   deletingId = id;
   const p = products.find(x=>x.id===id);
-  document.getElementById("confirmText").textContent = p?`«${p.title}» будет удалена навсегда.`:"Это действие нельзя отменить.";
+  document.getElementById("confirmText").textContent = p ? `«${p.title}» будет удалена навсегда.` : "Это действие нельзя отменить.";
   openModal(confirmModal);
 }
-document.getElementById("confirmDelete").addEventListener("click", async () => {
+document.getElementById("confirmDelete").addEventListener("click",()=>{
   if(!deletingId) return;
-  const p = products.find(x=>x.id===deletingId);
-  if(p?.imageKey) await idbDel(p.imageKey);
-  if(p?.model3dKey) await idbDel(p.model3dKey);
   products = products.filter(p=>p.id!==deletingId);
   saveProducts();
   cart = cart.filter(i=>i.id!==deletingId);
-  saveCart();updateCartBadge(false);renderCart();
-  closeModal(confirmModal);renderProducts();renderAdminProductsList();
-  showToast("Удалено");deletingId = null;
+  saveCart(); updateCartBadge(false); renderCart();
+  closeModal(confirmModal); renderProducts(); renderAdminProductsList(); markDirty();
+  showToast("Удалено"); deletingId = null;
 });
 
-/* ADMIN PRODUCTS LIST */
 function renderAdminProductsList(){
   const list = document.getElementById("adminProductsList");
   list.innerHTML = products.map(p=>{
-    const imgData = p.imageKey ? assetCache[p.imageKey] : p.image;
-    const thumb = imgData ? `<img src="${imgData}" alt="">` : (SHAPES[p.shape]||SHAPES.cube);
+    const src = p.image || (p.imagePath ? rawUrl(p.imagePath) : null);
+    const thumb = src ? `<img src="${src}" alt="">` : (SHAPES[p.shape]||SHAPES.cube);
     const badges = [];
-    if(p.model3dKey) badges.push("3D");
-    if(p.imageKey) badges.push("фото");
+    if(p.model3d || p.model3dPath) badges.push("3D");
+    if(p.image || p.imagePath) badges.push("фото");
     const extra = badges.length ? badges.join(" · ") : "иконка";
-    return `<div class="admin-row">
-      <div class="thumb-small">${thumb}</div>
-      <div class="info"><h5>${escapeHtml(p.title)}</h5><p>${formatPrice(p.price)} ₽ · ${p.badge||"без тега"} · ${extra}</p></div>
-      <div class="actions">
-        <button data-edit-id="${p.id}">${ICONS.edit}</button>
-        <button class="danger" data-del-id="${p.id}">${ICONS.trash}</button>
-      </div>
-    </div>`;
+    return `<div class="admin-row"><div class="thumb-small">${thumb}</div><div class="info"><h5>${escapeHtml(p.title)}</h5><p>${formatPrice(p.price)} ₽ · ${p.badge||"без тега"} · ${extra}</p></div><div class="actions"><button data-edit-id="${p.id}">${ICONS.edit}</button><button class="danger" data-del-id="${p.id}">${ICONS.trash}</button></div></div>`;
   }).join("");
-  list.querySelectorAll("[data-edit-id]").forEach(b=>b.addEventListener("click",()=>{
-    closeAdminPanel();
-    setTimeout(()=>openEditModal(Number(b.dataset.editId)),200);
-  }));
-  list.querySelectorAll("[data-del-id]").forEach(b=>b.addEventListener("click",()=>{
-    if(confirm("Удалить этот товар?")) openConfirm(Number(b.dataset.delId));
-  }));
+  list.querySelectorAll("[data-edit-id]").forEach(b=>b.addEventListener("click",()=>{closeAdminPanel();setTimeout(()=>openEditModal(Number(b.dataset.editId)),200)}));
+  list.querySelectorAll("[data-del-id]").forEach(b=>b.addEventListener("click",()=>{ if(confirm("Удалить этот товар?")) openConfirm(Number(b.dataset.delId)); }));
 }
 
-/* ADMIN FEATURES LIST */
 function renderAdminFeaturesList(){
   const list = document.getElementById("adminFeaturesList");
   list.innerHTML = features.map((f,i)=>`
@@ -2227,40 +1933,26 @@ function renderAdminFeaturesList(){
       <textarea data-feat-text="${i}" placeholder="Описание" style="padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:13px;min-height:50px;resize:vertical;outline:none">${escapeHtml(f.text)}</textarea>
     </div>
   `).join("");
-  list.querySelectorAll("[data-feat-title]").forEach(el=>el.addEventListener("input",()=>{
-    features[Number(el.dataset.featTitle)].title = el.value;
-    content.features = features;saveContent();renderFeatures();
-  }));
-  list.querySelectorAll("[data-feat-text]").forEach(el=>el.addEventListener("input",()=>{
-    features[Number(el.dataset.featText)].text = el.value;
-    content.features = features;saveContent();renderFeatures();
-  }));
-  list.querySelectorAll("[data-del-feat]").forEach(b=>b.addEventListener("click",()=>{
-    features.splice(Number(b.dataset.delFeat),1);
-    content.features = features;saveContent();renderFeatures();renderAdminFeaturesList();
-  }));
+  list.querySelectorAll("[data-feat-title]").forEach(el=>el.addEventListener("input",()=>{features[Number(el.dataset.featTitle)].title = el.value;saveContent();renderFeatures();markDirty();}));
+  list.querySelectorAll("[data-feat-text]").forEach(el=>el.addEventListener("input",()=>{features[Number(el.dataset.featText)].text = el.value;saveContent();renderFeatures();markDirty();}));
+  list.querySelectorAll("[data-del-feat]").forEach(b=>b.addEventListener("click",()=>{features.splice(Number(b.dataset.delFeat),1);saveContent();renderFeatures();renderAdminFeaturesList();markDirty();}));
 }
-document.getElementById("addFeatureBtn").addEventListener("click",()=>{
-  features.push({icon:"bolt",title:"Новое преимущество",text:"Описание"});
-  content.features = features;saveContent();renderFeatures();renderAdminFeaturesList();
-});
+document.getElementById("addFeatureBtn").addEventListener("click",()=>{features.push({icon:"bolt",title:"Новое преимущество",text:"Описание"});saveContent();renderFeatures();renderAdminFeaturesList();markDirty();});
 
 /* DATA */
 document.getElementById("exportData").addEventListener("click",()=>{
-  const data = {content,products,features,version:6,exported:new Date().toISOString()};
+  const data = {content,products,features,version:7,exported:new Date().toISOString()};
   const clone = JSON.parse(JSON.stringify(data));
-  clone.content.models3d = [];
-  clone.products.forEach(p=>{ delete p.imageKey; delete p.model3dKey; delete p.image; delete p.model3d; });
+  clone.content.models3d = (clone.content.models3d||[]).map(m=>({id:m.id,name:m.name,path:m.path||null,autorotate:m.autorotate,speed:m.speed}));
+  clone.products.forEach(p=>{ delete p.image; delete p.model3d; });
   const blob = new Blob([JSON.stringify(clone,null,2)],{type:"application/json"});
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;a.download = `nova-backup-${Date.now()}.json`;a.click();
-  URL.revokeObjectURL(url);
-  showToast("Экспортировано (без 3D и фото)");
+  const a = document.createElement("a"); a.href = url; a.download = `nova-backup-${Date.now()}.json`; a.click();
+  URL.revokeObjectURL(url); showToast("Экспортировано");
 });
 document.getElementById("importData").addEventListener("click",()=>document.getElementById("importInput").click());
 document.getElementById("importInput").addEventListener("change",e=>{
-  const f = e.target.files[0];if(!f)return;
+  const f = e.target.files[0]; if(!f) return;
   const r = new FileReader();
   r.onload = ev=>{
     try{
@@ -2268,29 +1960,19 @@ document.getElementById("importInput").addEventListener("change",e=>{
       if(data.content){content={...DEFAULT_CONTENT,...data.content};content.models3d=content.models3d||[];saveContent();applyContent()}
       if(data.products){products=data.products;saveProducts();renderProducts()}
       if(data.features){features=data.features;content.features=features;saveContent();renderFeatures()}
-      renderAdminFeaturesList();renderAdminProductsList();renderAdminModelsList();syncAdminFields();
-      renderShowcase();
-      showToast("Импортировано");
+      renderAdminFeaturesList(); renderAdminProductsList(); renderAdminModelsList(); syncAdminFields(); renderShowcase();
+      showToast("Импортировано"); markDirty();
     }catch(err){showToast("Ошибка чтения файла")}
   };
   r.readAsText(f);
 });
-document.getElementById("cleanAssetsBtn").addEventListener("click", async () => {
-  if(!confirm("Удалить все загруженные 3D-модели и фото? Тексты и товары останутся.")) return;
-  await idbClear();
-  content.models3d = [];
-  products.forEach(p => { p.imageKey = null; p.model3dKey = null; });
-  saveContent(); saveProducts();
-  renderProducts(); renderAdminModelsList(); renderAdminProductsList(); renderShowcase();
-  showToast("Ассеты очищены");
-});
-document.getElementById("resetAll").addEventListener("click", async () => {
-  if(!confirm("Сбросить всё к заводским настройкам?")) return;
-  await idbClear();
-  localStorage.removeItem(LS_CONTENT);
-  localStorage.removeItem(LS_PRODUCTS);
-  localStorage.removeItem(LS_CART);
-  location.reload();
+document.getElementById("discardBtn").addEventListener("click",async()=>{
+  if(!confirm("Отменить все неопубликованные изменения?")) return;
+  const ok = await loadFromGitHub();
+  if(ok){
+    renderProducts(); renderFeatures(); renderShowcase(); renderAdminProductsList(); renderAdminFeaturesList(); renderAdminModelsList(); applyContent(); syncAdminFields();
+    isDirty = false; updateStatus("ok","Изменения отменены"); showToast("Загружено с GitHub");
+  }
 });
 
 /* CHECKOUT */
@@ -2298,10 +1980,10 @@ function openCheckout(){
   if(!cart.length){ showToast("Корзина пуста"); return; }
   try{
     const last = JSON.parse(localStorage.getItem("nova_customer")||"{}");
-    if(last.name)document.getElementById("cName").value=last.name;
-    if(last.phone)document.getElementById("cPhone").value=last.phone;
-    if(last.email)document.getElementById("cEmail").value=last.email;
-    if(last.address)document.getElementById("cAddress").value=last.address;
+    if(last.name) document.getElementById("cName").value = last.name;
+    if(last.phone) document.getElementById("cPhone").value = last.phone;
+    if(last.email) document.getElementById("cEmail").value = last.email;
+    if(last.address) document.getElementById("cAddress").value = last.address;
   }catch(e){}
   document.getElementById("checkoutError").classList.remove("show");
   openModal(document.getElementById("checkoutModal"));
@@ -2312,27 +1994,25 @@ document.getElementById("confirmOrder").addEventListener("click",()=>{
   const email = document.getElementById("cEmail").value.trim();
   const address = document.getElementById("cAddress").value.trim();
   const err = document.getElementById("checkoutError");
-  if(!name||!phone||!address){
+  if(!name || !phone || !address){
     err.textContent = "Заполните имя, телефон и адрес";
-    err.classList.remove("show");void err.offsetWidth;err.classList.add("show");
-    return;
+    err.classList.remove("show"); void err.offsetWidth; err.classList.add("show"); return;
   }
-  localStorage.setItem("nova_customer",JSON.stringify({name,phone,email,address}));
+  localStorage.setItem("nova_customer", JSON.stringify({name,phone,email,address}));
   const num = "NV-"+Math.floor(100000+Math.random()*900000);
   document.getElementById("orderNum").textContent = "#"+num;
-  cart = [];saveCart();updateCartBadge(false);renderCart();
-  closeCart();closeModal(document.getElementById("checkoutModal"));
+  cart = []; saveCart(); updateCartBadge(false); renderCart();
+  closeCart(); closeModal(document.getElementById("checkoutModal"));
   setTimeout(()=>openModal(document.getElementById("successModal")),250);
 });
 
 /* FILTERS */
 document.getElementById("filterBar").addEventListener("click",e=>{
-  const chip = e.target.closest(".chip");if(!chip)return;
+  const chip = e.target.closest(".chip"); if(!chip) return;
   document.querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
-  chip.classList.add("active");
-  currentFilter = chip.dataset.filter;
+  chip.classList.add("active"); currentFilter = chip.dataset.filter;
   const grid = document.getElementById("grid");
-  grid.style.opacity = "0";grid.style.transform = "translateY(15px)";grid.style.transition = "all .3s var(--ease)";
+  grid.style.opacity = "0"; grid.style.transform = "translateY(15px)"; grid.style.transition = "all .3s var(--ease)";
   setTimeout(()=>{renderProducts();grid.style.opacity="1";grid.style.transform="translateY(0)"},250);
 });
 
@@ -2345,7 +2025,7 @@ function showToast(text){
     document.body.appendChild(toastEl);
   }
   toastEl.textContent = text;
-  toastEl.style.opacity = "1";toastEl.style.transform = "translateX(-50%) translateY(0)";
+  toastEl.style.opacity = "1"; toastEl.style.transform = "translateX(-50%) translateY(0)";
   clearTimeout(showToast._t);
   showToast._t = setTimeout(()=>{toastEl.style.opacity="0";toastEl.style.transform="translateX(-50%) translateY(20px)"},2200);
 }
@@ -2387,8 +2067,7 @@ window.addEventListener("scroll",()=>{
   else navEl.style.transform = "translateY(0)";
   lastY = y;
   const h = document.documentElement.scrollHeight - window.innerHeight;
-  const p = h>0 ? (y/h)*100 : 0;
-  document.getElementById("progress").style.width = p+"%";
+  document.getElementById("progress").style.width = (h>0?(y/h)*100:0)+"%";
 },{passive:true});
 
 /* THEME */
@@ -2404,26 +2083,12 @@ document.getElementById("themeToggle").addEventListener("click",()=>{
 
 /* INIT */
 async function init(){
-  // Сначала прелоадим ассеты из IDB
-  await preloadAssets();
-  // Мигрируем старые данные из localStorage
-  await migrateToIDB();
-
-  applyContent();
-  renderProducts();
-  renderFeatures();
-  renderShowcase();
-  updateCartBadge(false);
-  renderCart();
-  initReveal();
-  initCounters();
-
+  await loadFromGitHub();
+  applyContent(); renderProducts(); renderFeatures(); renderShowcase();
+  updateCartBadge(false); renderCart(); initReveal(); initCounters();
   if(isAdmin) document.body.classList.add("is-admin");
-
-  setTimeout(()=>{
-    document.getElementById("loader").classList.add("done");
-    document.body.classList.remove("no-scroll");
-  }, 1400);
+  setTimeout(()=>{ document.getElementById("loader").classList.add("done"); document.body.classList.remove("no-scroll"); }, 1400);
+  updateStatus(ghReady() ? "ok" : "idle", ghReady() ? "GitHub подключён" : "Готово к работе");
 }
 
 init();
