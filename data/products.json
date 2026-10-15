@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1,
+    "title": "Дракон Драконьего Пикал",
+    "desc": "Высота 24 см · смола высокого разрешения",
+    "price": 4990,
+    "shape": "helix",
+    "badge": "hit",
+    "image": null,
+    "model3d": null
+  },
+  {
+    "id": 2,
+    "title": "Бюст Самурая",
+    "desc": "Детализация 0.03 мм · ручная покраска",
+    "price": 7490,
+    "shape": "pyramid",
+    "badge": "new",
+    "image": null,
+    "model3d": null
+  },
+  {
+    "id": 3,
+    "title": "Корабль XR-9",
+    "desc": "Сборная модель · 42 детали",
+    "price": 5290,
+    "shape": "cube",
+    "badge": "",
+    "image": null,
+    "model3d": null
+  },
+  {
+    "id": 4,
+    "title": "Череп Механика",
+    "desc": "Подвижные элементы · светящаяся смола",
+    "price": 6990,
+    "shape": "sphere",
+    "badge": "limited",
+    "image": null,
+    "model3d": null
+  },
+  {
+    "id": 5,
+    "title": "Волк-страж",
+    "desc": "Гарнитурная смола · высота 18 см",
+    "price": 5490,
+    "shape": "torus",
+    "badge": "",
+    "image": null,
+    "model3d": null
+  },
+  {
+    "id": 6,
+    "title": "Ворота Тории",
+    "desc": "Миниатюра для интерьера · подсветка",
+    "price": 3890,
+    "shape": "star",
+    "badge": "new",
+    "image": null,
+    "model3d": null
+  }
+]
