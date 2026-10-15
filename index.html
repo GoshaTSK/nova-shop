@@ -613,6 +613,24 @@
   .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin360 .8s linear infinite}
   @keyframes spin360{to{transform:rotate(360deg)}}
 
+    .gh-setup{padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:20px}
+  .gh-setup.ok{border-color:var(--success)}
+  .gh-setup.bad{border-color:var(--warn)}
+  .gh-setup h4{font-size:14px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .gh-setup h4 svg{width:16px;height:16px}
+  .gh-setup .status{font-size:12.5px;color:var(--muted);line-height:1.6}
+  .gh-setup .status b{color:var(--text)}
+  .status-bar{position:absolute;bottom:0;left:0;right:0;padding:10px 22px;font-size:12px;background:var(--surface);border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0}
+  .status-bar .dot-ind{width:8px;height:8px;border-radius:50%;background:var(--success);flex-shrink:0}
+  .status-bar .dot-ind.dirty{background:var(--warn);animation:pulseDot 1.5s infinite}
+  .status-bar .dot-ind.error{background:var(--danger)}
+  .status-bar .msg{flex:1;color:var(--muted)}
+  .admin-popup-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .admin-popup-btn.primary:hover{background:var(--accent-hover)}
+  .admin-popup-btn.warn{color:var(--warn);border-color:var(--warn)}
+  .admin-popup-btn.warn:hover{background:var(--warn);color:#fff}
+  .admin-btn.warn{background:transparent;color:var(--warn);border-color:var(--warn)}
+  .admin-btn.warn:hover{background:var(--warn);color:#fff}
   @media (max-width:720px){
     .hero{padding:100px 20px 60px}
     .cta-banner{padding:60px 24px}
@@ -788,6 +806,10 @@
         Супер Админ
       </h2>
       <div style="display:flex;gap:6px;align-items:center">
+                <button class="admin-popup-btn primary" id="publishBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Опубликовать
+        </button>
         <button class="admin-popup-btn danger" id="logoutBtn" title="Выйти из админа">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
           Выйти
@@ -798,7 +820,8 @@
       </div>
     </div>
     <div class="admin-panel-tabs">
-      <button class="admin-tab active" data-tab="content">Контент</button>
+      <button class="admin-tab active" data-tab="github">GitHub</button>
+<button class="admin-tab" data-tab="content">Контент</button>
       <button class="admin-tab" data-tab="model3d">3D Модели</button>
       <button class="admin-tab" data-tab="products">Товары</button>
       <button class="admin-tab" data-tab="features">Преимущества</button>
@@ -807,6 +830,23 @@
       <button class="admin-tab" data-tab="data">Данные</button>
     </div>
     <div class="admin-panel-body">
+
+            <div class="admin-tab-content active" data-content="github">
+        <div class="gh-setup bad" id="ghSetup">
+          <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><span id="ghStatusTitle">Не подключено к GitHub</span></h4>
+          <div class="status" id="ghStatusText">Заполните поля ниже, чтобы редактор мог публиковать изменения на сайт.</div>
+        </div>
+        <h3 class="admin-section-title">Настройки подключения</h3>
+        <div class="admin-hint" style="margin-bottom:16px">Данные хранятся только в этом браузере.</div>
+        <div class="admin-field"><label>Владелец репозитория</label><input type="text" id="ghOwner" placeholder="ivan123"></div>
+        <div class="admin-field"><label>Имя репозитория</label><input type="text" id="ghRepo" placeholder="nova-shop"></div>
+        <div class="admin-field"><label>Ветка</label><input type="text" id="ghBranch" placeholder="main" value="main"></div>
+        <div class="admin-field"><label>Personal Access Token</label><input type="password" id="ghToken" placeholder="github_pat_..."></div>
+        <div class="admin-btn-row">
+          <button class="admin-btn" id="ghSave">Проверить и сохранить</button>
+          <button class="admin-btn ghost" id="ghClear">Забыть токен</button>
+        </div>
+      </div>
 
       <div class="admin-tab-content active" data-content="content">
         <h3 class="admin-section-title">Бренд</h3>
@@ -895,14 +935,20 @@
         <button class="admin-btn ghost" id="cleanAssetsBtn" style="width:100%;justify-content:center">Очистить ассеты</button>
         <h3 class="admin-section-title">Сброс</h3>
         <div class="admin-hint" style="margin-bottom:14px">Вернуть сайт к заводским настройкам. Удалит ВСЁ включая ассеты.</div>
+                <div class="admin-btn-row" style="margin-bottom:14px">
+          <button class="admin-btn warn" id="discardBtn" style="width:100%;justify-content:center">Отменить неопубликованные</button>
+        </div>
         <button class="admin-btn danger" id="resetAll" style="width:100%;justify-content:center">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
           Сбросить всё
         </button>
       </div>
-
     </div>
   </div>
+      <div class="status-bar">
+      <span class="dot-ind" id="statusDot"></span>
+      <span class="msg" id="statusMsg">Готово к работе</span>
+    </div>
 </aside>
 
 <div class="modal" id="loginModal">
