@@ -27,7 +27,15 @@
   "stat4_num": "4",
   "stat4_label": "Среднее время",
   "ticker_items": "Печать 0.03 мм\nПремиум-смолы\nРучная покраска\nДоставка по РФ\nГарантия качества\nКастомные модели",
-  "models3d": [],
+  "models3d": [
+    {
+      "id": 1,
+      "name": "17bf0488cbc827c902c2ed8e6a409f87",
+      "path": "models/1794479091706_1_17bf0488cbc827c902c2ed8e6a409f87.glb",
+      "autorotate": "yes",
+      "speed": "1.5"
+    }
+  ],
   "features": [
     {
       "icon": "bolt",
